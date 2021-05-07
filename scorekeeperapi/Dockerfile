@@ -5,7 +5,8 @@ RUN apt-get update; apt-get upgrade; apt-get install -y sqlite3
 
 RUN go get -u github.com/gorilla/mux; \
     go get database/sql; \ 
-    go get github.com/mattn/go-sqlite3;
+    go get github.com/mattn/go-sqlite3; \
+    go get github.com/stretchr/testify;
 
 WORKDIR /code
 
