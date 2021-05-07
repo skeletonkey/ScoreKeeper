@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"errors"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -44,6 +46,7 @@ func main() {
 	// Scores
 	router.HandleFunc("/api/scores", GetScores).Methods("GET")
 	router.HandleFunc("/api/score", SetScore).Methods("POST")
+	router.HandleFunc("/api/score", UpdateScore).Methods("PUT")
 
 	// Running the Server
 	log.Fatal(http.ListenAndServe(":8080", router))
@@ -210,29 +213,10 @@ func SetScore(w http.ResponseWriter, r *http.Request) {
 	var scoreInfo Score
 	json.NewDecoder(r.Body).Decode(&scoreInfo)
 
-	if scoreInfo.DatePlayed == "" {
-		dt := time.Now()
-		scoreInfo.DatePlayed = dt.Format("2021-05-11")
-	} else {
-		correctFormat, err := regexp.Match(`^\d{4}-\d{2}-\d{2}$`, []byte(scoreInfo.DatePlayed))
-		if err != nil {
-			log.Println("Unrecoverable error while validating date played information: ")
-			panic(err)
-		}
-		if !correctFormat {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ErrorMsg{Error: "Date Played needs to be in the correct format: YYYY-MM-DD"})
-			return
-		}
-	}
-
-	// At least a first name needs to be provided.
-	if scoreInfo.GameId == 0 {
+	ok, err := scoreInfo.Validate()
+	if !ok {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(ErrorMsg{Error: "Game ID needs to be provided"})
-	} else if scoreInfo.UserId == 0 {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(ErrorMsg{Error: "User ID needs to be provided"})
+		json.NewEncoder(w).Encode(ErrorMsg{Error: err.Error()})
 	} else {
 		db := DB{Filename: dbFileName}
 
@@ -243,6 +227,31 @@ func SetScore(w http.ResponseWriter, r *http.Request) {
 		} else {
 			scoreInfo.Id = scoreId
 
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(scoreInfo)
+		}
+	}
+}
+
+func UpdateScore(w http.ResponseWriter, r *http.Request) {
+	log.Println("UpdateScore called")
+	w.Header().Set("Content-Type", "application/json")
+
+	var scoreInfo Score
+	json.NewDecoder(r.Body).Decode(&scoreInfo)
+
+	ok, err := scoreInfo.Validate()
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorMsg{Error: err.Error()})
+	} else {
+		db := DB{Filename: dbFileName}
+
+		_, err := db.UpdateScore(scoreInfo)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ErrorMsg{Error: "Error while adding new score: " + err.Error()})
+		} else {
 			w.WriteHeader(http.StatusCreated)
 			json.NewEncoder(w).Encode(scoreInfo)
 		}
@@ -276,6 +285,41 @@ type Score struct {
 type DB struct {
 	Filename   string
 	connection *sql.DB
+}
+
+func (s Score) Validate() (bool, error) {
+	var valid bool = false
+	var retError error
+	var errMsgs []string
+
+	if s.DatePlayed == "" {
+		dt := time.Now()
+		s.DatePlayed = dt.Format("2021-05-11")
+	} else {
+		correctFormat, err := regexp.Match(`^\d{4}-\d{2}-\d{2}$`, []byte(s.DatePlayed))
+		if err != nil {
+			errMsgs = append(errMsgs, "Unrecoverable error while validating date played information: "+err.Error())
+		}
+		if !correctFormat {
+			errMsgs = append(errMsgs, "Date Played needs to be in the correct format: YYYY-MM-DD")
+		}
+	}
+
+	if s.GameId == 0 {
+		errMsgs = append(errMsgs, "Game ID needs to be provided")
+	}
+
+	if s.UserId == 0 {
+		errMsgs = append(errMsgs, "User ID needs to be provided")
+	}
+
+	if len(errMsgs) == 0 {
+		valid = true
+	} else {
+		retError = errors.New(strings.Join(errMsgs, "\n"))
+	}
+
+	return valid, retError
 }
 
 func (db *DB) initDB() {
@@ -469,4 +513,25 @@ func (db DB) InsertScore(score Score) (int32, error) {
 	}
 
 	return int32(scoreId), err
+}
+
+func (db DB) UpdateScore(score Score) (bool, error) {
+	var ok bool
+
+	sql := `
+		UPDATE score
+		SET user_id = ?, game_id = ?, date_played = ?, score = ?
+		WHERE id = ?
+	`
+	stmt, err := db.getConnection().Prepare(sql)
+	if err == nil {
+		_, err2 := stmt.Exec(score.UserId, score.GameId, score.DatePlayed, score.Score, score.Id)
+		if err2 != nil {
+			err = err2
+		} else {
+			ok = true
+		}
+	}
+
+	return ok, err
 }
