@@ -36,6 +36,7 @@ func main() {
 	// User
 	router.HandleFunc("/api/users", GetUsers).Methods("GET")
 	router.HandleFunc("/api/user/{id}", GetUser).Methods("GET")
+	router.HandleFunc("/api/user/{id}/scores", GetUserScores).Methods("GET")
 	router.HandleFunc("/api/user", AddUser).Methods("POST")
 
 	// Game
@@ -74,6 +75,33 @@ func GetUser(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusNoContent)
 			} else {
 				json.NewEncoder(w).Encode(user)
+			}
+		}
+	}
+}
+
+func GetUserScores(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	vars := mux.Vars(r)
+
+	if vars["id"] == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorMsg{Error: "No user 'id' provided"})
+	} else {
+		db := DB{Filename: dbFileName}
+		userId, convertErr := strconv.Atoi(vars["id"])
+		if convertErr != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ErrorMsg{Error: "Error while attempting to convert user id: " + convertErr.Error()})
+		} else {
+			users, err := db.GetScoresByUser(int32(userId))
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(ErrorMsg{Error: "Error while looking up scores for a user: " + err.Error()})
+			} else if (users == []User{}) {
+				w.WriteHeader(http.StatusNoContent)
+			} else {
+				json.NewEncoder(w).Encode(users)
 			}
 		}
 	}
@@ -479,6 +507,31 @@ func (db DB) GetScores() (scores []Score) {
 
 	dbh := db.getConnection()
 	rows, err := dbh.Query(sql)
+
+	if err != nil {
+		log.Println("Error while attempting to get all scores:")
+		panic(err)
+	}
+
+	for rows.Next() {
+		score := Score{}
+		err = rows.Scan(&score.Id, &score.UserId, &score.GameId, &score.DatePlayed, &score.Score)
+		scores = append(scores, score)
+	}
+
+	return scores
+}
+
+func (db DB) GetScoresByUser(id int32) (scores []Score) {
+	log.Println("DB GetScores")
+	sql := `SELECT id, user_id, game_id, date_played, score FROM score where user_id = ?`
+
+	stmt, err := db.getConnection().Prepare(sql)
+	if err == nil {
+		result, err2 := stmt.Exec(score.UserId, score.GameId, score.DatePlayed, score.Score)
+		if err2 != nil {
+			err = err
+		}
 
 	if err != nil {
 		log.Println("Error while attempting to get all scores:")
